@@ -5,7 +5,7 @@ const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");
 const app = express();
-const PORT = process.env.PORT || 4000;
+const PORT = process.env.PORT || 3000; // Vercel will override this automatically
 
 // Connect to MongoDB
 mongoose.connect(process.env.MONGODB_URI);
@@ -126,7 +126,6 @@ app.delete("/todos/:id", async (req, res) => {
 });
 
 // Start the server on all network interfaces
-app.listen(PORT, "0.0.0.0", () => {
+app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
-  console.log(`Server is accessible from all network interfaces`);
 });
