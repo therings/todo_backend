@@ -20,6 +20,7 @@ db.once("open", () => {
 const TodoSchema = new mongoose.Schema({
   title: { type: String, required: true },
   completed: { type: Boolean, default: false },
+  createdAt: { type: Date, default: Date.now },
 });
 const Todo = mongoose.model("Todo", TodoSchema);
 
@@ -45,6 +46,7 @@ app.get("/todos", async (req, res) => {
       id: todo._id.toString(), // Convert MongoDB ObjectId to string
       title: todo.title,
       completed: todo.completed,
+      createdAt: todo.createdAt,
     }));
     res.json(formattedTodos); // Respond with the formatted list of todos
   } catch (err) {
@@ -67,6 +69,7 @@ app.post("/todos", async (req, res) => {
       id: savedTodo._id.toString(),
       title: savedTodo.title,
       completed: savedTodo.completed,
+      createdAt: savedTodo.createdAt,
     };
 
     res.status(201).json(responseTodo); // Respond with the created Todo
@@ -92,7 +95,15 @@ app.put("/todos/:id", async (req, res) => {
       return res.status(404).json({ error: "Todo not found" }); // Handle not found case
     }
 
-    res.json(updatedTodo); // Respond with the updated Todo
+    // Format the response to match other endpoints
+    const responseTodo = {
+      id: updatedTodo._id.toString(),
+      title: updatedTodo.title,
+      completed: updatedTodo.completed,
+      createdAt: updatedTodo.createdAt,
+    };
+
+    res.json(responseTodo); // Respond with the updated Todo
   } catch (err) {
     res.status(500).json({ error: err.message }); // Handle errors
   }
