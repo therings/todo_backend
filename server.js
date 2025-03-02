@@ -21,7 +21,9 @@ const TodoSchema = new mongoose.Schema({
   title: { type: String, required: true },
   completed: { type: Boolean, default: false },
   createdAt: { type: Date, default: Date.now },
+  updatedAt: { type: Date, default: null }, // Default to null for new todos
 });
+
 const Todo = mongoose.model("Todo", TodoSchema);
 
 // Add JSON middleware to parse request body
@@ -41,40 +43,45 @@ app.get("/hi", (req, res) => {
 // Todo list route
 app.get("/todos", async (req, res) => {
   try {
-    const todos = await Todo.find().lean(); // Fetch all todos from the database
+    const todos = await Todo.find().lean();
     const formattedTodos = todos.map((todo) => ({
-      id: todo._id.toString(), // Convert MongoDB ObjectId to string
+      id: todo._id.toString(),
       title: todo.title,
       completed: todo.completed,
       createdAt: todo.createdAt,
+      updatedAt: todo.updatedAt,
     }));
-    res.json(formattedTodos); // Respond with the formatted list of todos
+    res.json(formattedTodos);
   } catch (err) {
-    res.status(500).json({ error: err.message }); // Handle errors
+    res.status(500).json({ error: err.message });
   }
 });
 
 // Create new Todo
 app.post("/todos", async (req, res) => {
   if (!req.body.title) {
-    return res.status(400).json({ error: "Title is required" }); // Validate request body
+    return res.status(400).json({ error: "Title is required" });
   }
 
   try {
-    const newTodo = new Todo({ title: req.body.title }); // Create a new Todo instance
-    const savedTodo = await newTodo.save(); // Save the new Todo to the database
+    const newTodo = new Todo({
+      title: req.body.title,
+      createdAt: req.body.createdAt || new Date(),
+      updatedAt: null, // Explicitly set to null for new todos
+    });
+    const savedTodo = await newTodo.save();
 
-    // Convert _id to id for response
     const responseTodo = {
       id: savedTodo._id.toString(),
       title: savedTodo.title,
       completed: savedTodo.completed,
       createdAt: savedTodo.createdAt,
+      updatedAt: savedTodo.updatedAt,
     };
 
-    res.status(201).json(responseTodo); // Respond with the created Todo
+    res.status(201).json(responseTodo);
   } catch (err) {
-    console.error("Database save error:", err); // Log error
+    console.error("Database save error:", err);
     res.status(500).json({
       error: "Internal server error",
       detail: err.message,
@@ -85,27 +92,32 @@ app.post("/todos", async (req, res) => {
 // Update Todo
 app.put("/todos/:id", async (req, res) => {
   try {
+    const updateData = { ...req.body };
+
+    // Always set updatedAt when updating
+    updateData.updatedAt = new Date();
+
     const updatedTodo = await Todo.findByIdAndUpdate(
       req.params.id,
-      { $set: req.body }, // Update the Todo with the provided data
+      { $set: updateData },
       { new: true }
     );
 
     if (!updatedTodo) {
-      return res.status(404).json({ error: "Todo not found" }); // Handle not found case
+      return res.status(404).json({ error: "Todo not found" });
     }
 
-    // Format the response to match other endpoints
     const responseTodo = {
       id: updatedTodo._id.toString(),
       title: updatedTodo.title,
       completed: updatedTodo.completed,
       createdAt: updatedTodo.createdAt,
+      updatedAt: updatedTodo.updatedAt,
     };
 
-    res.json(responseTodo); // Respond with the updated Todo
+    res.json(responseTodo);
   } catch (err) {
-    res.status(500).json({ error: err.message }); // Handle errors
+    res.status(500).json({ error: err.message });
   }
 });
 
