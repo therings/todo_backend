@@ -1,14 +1,14 @@
-// Load environment variables from .env file
 require("dotenv").config();
 
-// Import required dependencies
+// First, install dependencies: npm install express
 const express = require("express");
 const mongoose = require("mongoose");
 const cors = require("cors");
 const app = express();
-const PORT = process.env.PORT || 3000; // Default port if not specified in environment
+const PORT = process.env.PORT || 3000; // Vercel will override this automatically
+const { router: userRoutes, auth } = require("./user/userRoutes");
 
-// MongoDB Connection Setup
+// Connect to MongoDB
 mongoose.connect(process.env.MONGODB_URI);
 
 const db = mongoose.connection;
@@ -17,50 +17,53 @@ db.once("open", () => {
   console.log("Connected to MongoDB");
 });
 
-// Schema Definitions
-// Todo Schema: Represents the structure of active todo items
+// Define Todo model
 const TodoSchema = new mongoose.Schema({
   title: { type: String, required: true },
   completed: { type: Boolean, default: false },
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: null },
-  completedAt: { type: Date, default: null }, // Tracks when a todo was completed
+  completedAt: { type: Date, default: null },
+  user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
 });
 
 const Todo = mongoose.model("Todo", TodoSchema);
 
-// DeletedTodo Schema: Keeps track of deleted todos for historical purposes
+// Define DeletedTodo model
 const DeletedTodoSchema = new mongoose.Schema({
   title: { type: String, required: true },
   completed: { type: Boolean, default: false },
   createdAt: { type: Date },
   updatedAt: { type: Date },
   completedAt: { type: Date },
-  deletedAt: { type: Date, default: Date.now }, // Tracks when the todo was deleted
-  originalId: { type: String }, // References the original todo's ID
+  deletedAt: { type: Date, default: Date.now },
+  originalId: { type: String },
+  user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
 });
 
 const DeletedTodo = mongoose.model("DeletedTodo", DeletedTodoSchema);
 
-// Middleware Configuration
-app.use(express.json()); // Parse JSON request bodies
-app.use(cors()); // Enable Cross-Origin Resource Sharing
+// Add JSON middleware to parse request body
+app.use(express.json());
+app.use(cors());
 
-// API Routes
-// Basic health check endpoints
+// Add user routes
+app.use("/api/users", userRoutes);
+
+// Root route
 app.get("/", (req, res) => {
-  res.send("Hello World!");
+  res.send("Hello World!"); // Responds with a simple greeting
 });
 
+// Greeting route
 app.get("/hi", (req, res) => {
-  res.send("Hi!");
+  res.send("Hi!"); // Responds with a friendly greeting
 });
 
-// Todo Management Routes
-// GET /todos - Retrieve all active todos
-app.get("/todos", async (req, res) => {
+// Todo list route
+app.get("/todos", auth, async (req, res) => {
   try {
-    const todos = await Todo.find().lean();
+    const todos = await Todo.find({ user: req.user._id }).lean();
     const formattedTodos = todos.map((todo) => ({
       id: todo._id.toString(),
       title: todo.title,
@@ -75,10 +78,10 @@ app.get("/todos", async (req, res) => {
   }
 });
 
-// GET /deleted-todos - Retrieve all deleted todos, sorted by deletion date
-app.get("/deleted-todos", async (req, res) => {
+// Get all deleted todos
+app.get("/deleted-todos", auth, async (req, res) => {
   try {
-    const deletedTodos = await DeletedTodo.find()
+    const deletedTodos = await DeletedTodo.find({ user: req.user._id })
       .sort({ deletedAt: -1 })
       .lean();
     const formattedTodos = deletedTodos.map((todo) => ({
@@ -97,8 +100,8 @@ app.get("/deleted-todos", async (req, res) => {
   }
 });
 
-// POST /todos - Create a new todo
-app.post("/todos", async (req, res) => {
+// Create new Todo
+app.post("/todos", auth, async (req, res) => {
   if (!req.body.title) {
     return res.status(400).json({ error: "Title is required" });
   }
@@ -108,7 +111,8 @@ app.post("/todos", async (req, res) => {
       title: req.body.title,
       createdAt: req.body.createdAt || new Date(),
       updatedAt: null,
-      completedAt: null, // Explicitly set completedAt to null for new todos
+      completedAt: null,
+      user: req.user._id,
     });
     const savedTodo = await newTodo.save();
 
@@ -118,7 +122,7 @@ app.post("/todos", async (req, res) => {
       completed: savedTodo.completed,
       createdAt: savedTodo.createdAt,
       updatedAt: savedTodo.updatedAt,
-      completedAt: savedTodo.completedAt, // Include completedAt in response
+      completedAt: savedTodo.completedAt,
     };
 
     res.status(201).json(responseTodo);
@@ -131,8 +135,8 @@ app.post("/todos", async (req, res) => {
   }
 });
 
-// POST /deleted-todos - Archive a deleted todo
-app.post("/deleted-todos", async (req, res) => {
+// Save deleted todo
+app.post("/deleted-todos", auth, async (req, res) => {
   try {
     const deletedTodo = new DeletedTodo({
       title: req.body.title,
@@ -141,6 +145,7 @@ app.post("/deleted-todos", async (req, res) => {
       updatedAt: req.body.updatedAt,
       deletedAt: req.body.deletedAt || new Date(),
       originalId: req.body.originalId,
+      user: req.user._id,
     });
 
     const savedTodo = await deletedTodo.save();
@@ -161,20 +166,18 @@ app.post("/deleted-todos", async (req, res) => {
   }
 });
 
-// PUT /todos/:id - Update an existing todo
-// Handles both general updates and completion status
-app.put("/todos/:id", async (req, res) => {
+// Update Todo
+app.put("/todos/:id", auth, async (req, res) => {
   try {
     const updateData = { ...req.body };
     updateData.updatedAt = new Date();
 
-    // Set completedAt when todo is marked as completed
     if (updateData.completed !== undefined) {
       updateData.completedAt = updateData.completed ? new Date() : null;
     }
 
-    const updatedTodo = await Todo.findByIdAndUpdate(
-      req.params.id,
+    const updatedTodo = await Todo.findOneAndUpdate(
+      { _id: req.params.id, user: req.user._id },
       { $set: updateData },
       { new: true }
     );
@@ -198,12 +201,15 @@ app.put("/todos/:id", async (req, res) => {
   }
 });
 
-// DELETE /todos/:id - Soft delete a todo (moves to deleted-todos)
-app.delete("/todos/:id", async (req, res) => {
+// Delete Todo
+app.delete("/todos/:id", auth, async (req, res) => {
   try {
     const id = req.params.id;
     const objectId = new mongoose.Types.ObjectId(id);
-    const deletedTodo = await Todo.findByIdAndDelete(objectId);
+    const deletedTodo = await Todo.findOneAndDelete({
+      _id: objectId,
+      user: req.user._id,
+    });
 
     if (!deletedTodo) {
       return res.status(404).json({ error: "Todo not found" });
@@ -223,14 +229,15 @@ app.delete("/todos/:id", async (req, res) => {
   }
 });
 
-// DELETE /deleted-todos/:id - Permanently remove a todo from deleted-todos
-app.delete("/deleted-todos/:id", async (req, res) => {
+// Permanently delete todo from deleted-todos
+app.delete("/deleted-todos/:id", auth, async (req, res) => {
   try {
     const id = req.params.id;
     const objectId = new mongoose.Types.ObjectId(id);
-    const permanentlyDeletedTodo = await DeletedTodo.findByIdAndDelete(
-      objectId
-    );
+    const permanentlyDeletedTodo = await DeletedTodo.findOneAndDelete({
+      _id: objectId,
+      user: req.user._id,
+    });
 
     if (!permanentlyDeletedTodo) {
       return res.status(404).json({ error: "Deleted todo not found" });
@@ -250,7 +257,7 @@ app.delete("/deleted-todos/:id", async (req, res) => {
   }
 });
 
-// Initialize server to listen on specified port
+// Start the server on all network interfaces
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
