@@ -7,6 +7,7 @@ const cors = require("cors");
 const app = express();
 const PORT = process.env.PORT || 3000; // Vercel will override this automatically
 const { router: userRoutes, auth } = require("./user/userRoutes");
+const Comment = require("./models/Comment");
 
 // Connect to MongoDB
 mongoose.connect(process.env.MONGODB_URI);
@@ -25,6 +26,7 @@ const TodoSchema = new mongoose.Schema({
   updatedAt: { type: Date, default: null },
   completedAt: { type: Date, default: null },
   user: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+  assignedUsers: [{ type: mongoose.Schema.Types.ObjectId, ref: "User" }],
 });
 
 const Todo = mongoose.model("Todo", TodoSchema);
@@ -43,27 +45,28 @@ const DeletedTodoSchema = new mongoose.Schema({
 
 const DeletedTodo = mongoose.model("DeletedTodo", DeletedTodoSchema);
 
-// Add JSON middleware to parse request body
-app.use(express.json());
+// Add JSON middleware to parse request body with increased limit
+app.use(express.json({ limit: "10mb" }));
 app.use(cors());
 
 // Add user routes
 app.use("/api/users", userRoutes);
 
-// Root route
-app.get("/", (req, res) => {
-  res.send("Hello World!"); // Responds with a simple greeting
-});
-
-// Greeting route
-app.get("/hi", (req, res) => {
-  res.send("Hi!"); // Responds with a friendly greeting
-});
-
 // Todo list route
-app.get("/todos", auth, async (req, res) => {
+app.get("/api/todos", auth, async (req, res) => {
   try {
-    const todos = await Todo.find({ user: req.user._id }).lean();
+    console.log("Fetching todos for user:", req.user._id);
+
+    // Find todos where user is either the creator or is assigned
+    const todos = await Todo.find({
+      $or: [{ user: req.user._id }, { assignedUsers: req.user._id }],
+    })
+      .populate("assignedUsers", "name picture")
+      .populate("user", "name picture")
+      .lean();
+
+    console.log("Found todos:", todos);
+
     const formattedTodos = todos.map((todo) => ({
       id: todo._id.toString(),
       title: todo.title,
@@ -71,15 +74,38 @@ app.get("/todos", auth, async (req, res) => {
       createdAt: todo.createdAt,
       updatedAt: todo.updatedAt,
       completedAt: todo.completedAt,
+      owner: {
+        id: todo.user._id.toString(),
+        name: todo.user.name,
+        avatar: todo.user.picture || null,
+      },
+      isCreator: todo.user._id.toString() === req.user._id.toString(),
+      isAssigned:
+        todo.assignedUsers?.some(
+          (user) => user._id.toString() === req.user._id.toString()
+        ) || false,
+      assignedUsers:
+        todo.assignedUsers?.map((user) => ({
+          id: user._id.toString(),
+          name: user.name,
+          avatar: user.picture || null,
+        })) || [],
     }));
+
+    console.log("Formatted todos:", formattedTodos);
     res.json(formattedTodos);
   } catch (err) {
+    console.error("Error fetching todos:", {
+      error: err.message,
+      stack: err.stack,
+      userId: req.user._id,
+    });
     res.status(500).json({ error: err.message });
   }
 });
 
 // Get all deleted todos
-app.get("/deleted-todos", auth, async (req, res) => {
+app.get("/api/deleted-todos", auth, async (req, res) => {
   try {
     const deletedTodos = await DeletedTodo.find({ user: req.user._id })
       .sort({ deletedAt: -1 })
@@ -101,7 +127,7 @@ app.get("/deleted-todos", auth, async (req, res) => {
 });
 
 // Create new Todo
-app.post("/todos", auth, async (req, res) => {
+app.post("/api/todos", auth, async (req, res) => {
   if (!req.body.title) {
     return res.status(400).json({ error: "Title is required" });
   }
@@ -114,7 +140,11 @@ app.post("/todos", auth, async (req, res) => {
       completedAt: null,
       user: req.user._id,
     });
+
     const savedTodo = await newTodo.save();
+    const populatedTodo = await Todo.findById(savedTodo._id)
+      .populate("user", "name picture")
+      .lean();
 
     const responseTodo = {
       id: savedTodo._id.toString(),
@@ -123,6 +153,13 @@ app.post("/todos", auth, async (req, res) => {
       createdAt: savedTodo.createdAt,
       updatedAt: savedTodo.updatedAt,
       completedAt: savedTodo.completedAt,
+      owner: {
+        id: populatedTodo.user._id.toString(),
+        name: populatedTodo.user.name,
+        avatar: populatedTodo.user.picture || null,
+      },
+      isCreator: true,
+      assignedUsers: [],
     };
 
     res.status(201).json(responseTodo);
@@ -136,7 +173,7 @@ app.post("/todos", auth, async (req, res) => {
 });
 
 // Save deleted todo
-app.post("/deleted-todos", auth, async (req, res) => {
+app.post("/api/deleted-todos", auth, async (req, res) => {
   try {
     const deletedTodo = new DeletedTodo({
       title: req.body.title,
@@ -167,10 +204,14 @@ app.post("/deleted-todos", auth, async (req, res) => {
 });
 
 // Update Todo
-app.put("/todos/:id", auth, async (req, res) => {
+app.put("/api/todos/:id", auth, async (req, res) => {
   try {
     const updateData = { ...req.body };
-    updateData.updatedAt = new Date();
+
+    // Only set updatedAt if there are changes other than completion status
+    if (Object.keys(updateData).some((key) => key !== "completed")) {
+      updateData.updatedAt = new Date();
+    }
 
     if (updateData.completed !== undefined) {
       updateData.completedAt = updateData.completed ? new Date() : null;
@@ -180,7 +221,10 @@ app.put("/todos/:id", auth, async (req, res) => {
       { _id: req.params.id, user: req.user._id },
       { $set: updateData },
       { new: true }
-    );
+    )
+      .populate("user", "name picture")
+      .populate("assignedUsers", "name picture")
+      .lean();
 
     if (!updatedTodo) {
       return res.status(404).json({ error: "Todo not found" });
@@ -193,6 +237,18 @@ app.put("/todos/:id", auth, async (req, res) => {
       createdAt: updatedTodo.createdAt,
       updatedAt: updatedTodo.updatedAt,
       completedAt: updatedTodo.completedAt,
+      owner: {
+        id: updatedTodo.user._id.toString(),
+        name: updatedTodo.user.name,
+        avatar: updatedTodo.user.picture || null,
+      },
+      isCreator: updatedTodo.user._id.toString() === req.user._id.toString(),
+      assignedUsers:
+        updatedTodo.assignedUsers?.map((user) => ({
+          id: user._id.toString(),
+          name: user.name,
+          avatar: user.picture || null,
+        })) || [],
     };
 
     res.json(responseTodo);
@@ -202,7 +258,7 @@ app.put("/todos/:id", auth, async (req, res) => {
 });
 
 // Delete Todo
-app.delete("/todos/:id", auth, async (req, res) => {
+app.delete("/api/todos/:id", auth, async (req, res) => {
   try {
     const id = req.params.id;
     const objectId = new mongoose.Types.ObjectId(id);
@@ -230,7 +286,7 @@ app.delete("/todos/:id", auth, async (req, res) => {
 });
 
 // Permanently delete todo from deleted-todos
-app.delete("/deleted-todos/:id", auth, async (req, res) => {
+app.delete("/api/deleted-todos/:id", auth, async (req, res) => {
   try {
     const id = req.params.id;
     const objectId = new mongoose.Types.ObjectId(id);
@@ -254,6 +310,242 @@ app.delete("/deleted-todos/:id", auth, async (req, res) => {
       receivedId: req.params.id,
       expectedFormat: "MongoDB ObjectId string",
     });
+  }
+});
+
+// Get comments for a todo
+app.get("/api/todos/:todoId/comments", auth, async (req, res) => {
+  try {
+    const comments = await Comment.find({ todoId: req.params.todoId })
+      .populate("user", "name picture")
+      .sort({ createdAt: -1 })
+      .lean();
+
+    const formattedComments = comments.map((comment) => ({
+      id: comment._id.toString(),
+      content: comment.content,
+      createdAt: comment.createdAt,
+      user: {
+        id: comment.user._id.toString(),
+        name: comment.user.name,
+        avatar: comment.user.picture || null,
+      },
+    }));
+
+    res.json(formattedComments);
+  } catch (err) {
+    console.error("Error in GET /api/todos/:todoId/comments:", {
+      error: err.message,
+      stack: err.stack,
+      todoId: req.params.todoId,
+    });
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Add a comment to a todo
+app.post("/api/todos/:todoId/comments", auth, async (req, res) => {
+  try {
+    const { content } = req.body;
+    if (!content) {
+      return res.status(400).json({ error: "Comment content is required" });
+    }
+
+    const comment = new Comment({
+      todoId: req.params.todoId,
+      user: req.user._id,
+      content,
+    });
+
+    const savedComment = await comment.save();
+    const populatedComment = await Comment.findById(savedComment._id)
+      .populate("user", "name picture")
+      .lean();
+
+    const formattedComment = {
+      id: populatedComment._id.toString(),
+      content: populatedComment.content,
+      createdAt: populatedComment.createdAt,
+      user: {
+        id: populatedComment.user._id.toString(),
+        name: populatedComment.user.name,
+        avatar: populatedComment.user.picture || null,
+      },
+    };
+
+    res.status(201).json(formattedComment);
+  } catch (err) {
+    console.error("Error in POST /api/todos/:todoId/comments:", {
+      error: err.message,
+      stack: err.stack,
+      todoId: req.params.todoId,
+    });
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Delete a comment
+app.delete("/api/todos/:todoId/comments/:commentId", auth, async (req, res) => {
+  try {
+    // First, find the comment
+    const comment = await Comment.findOne({
+      _id: req.params.commentId,
+      todoId: req.params.todoId,
+    });
+
+    if (!comment) {
+      return res.status(404).json({ error: "Comment not found" });
+    }
+
+    // Check if user is the comment creator
+    const isCommentCreator =
+      comment.user.toString() === req.user._id.toString();
+
+    // If not the creator, check if user is the todo owner
+    let isTodoOwner = false;
+    if (!isCommentCreator) {
+      const todo = await Todo.findById(req.params.todoId);
+      if (todo) {
+        isTodoOwner = todo.user.toString() === req.user._id.toString();
+      }
+    }
+
+    // Only allow deletion if user is either the comment creator or the todo owner
+    if (!isCommentCreator && !isTodoOwner) {
+      return res.status(403).json({
+        error:
+          "Permission denied. You can only delete your own comments or comments on your todos.",
+      });
+    }
+
+    // Use findOneAndDelete instead of calling delete() on the document
+    await Comment.findOneAndDelete({ _id: req.params.commentId });
+
+    res.sendStatus(204);
+  } catch (err) {
+    console.error("Error deleting comment:", {
+      error: err.message,
+      stack: err.stack,
+      todoId: req.params.todoId,
+      commentId: req.params.commentId,
+      userId: req.user._id,
+    });
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get assigned users for a todo
+app.get("/api/todos/:todoId/assigned", auth, async (req, res) => {
+  try {
+    console.log("Fetching assigned users for todo:", req.params.todoId);
+
+    // First verify the todo ID is valid
+    if (!mongoose.Types.ObjectId.isValid(req.params.todoId)) {
+      console.error("Invalid todo ID format:", req.params.todoId);
+      return res.status(400).json({ error: "Invalid todo ID format" });
+    }
+
+    const todo = await Todo.findById(req.params.todoId)
+      .populate("assignedUsers", "name picture")
+      .lean();
+
+    console.log("Found todo:", todo);
+
+    if (!todo) {
+      console.log("Todo not found with ID:", req.params.todoId);
+      return res.status(404).json({ error: "Todo not found" });
+    }
+
+    if (!todo.assignedUsers) {
+      console.log("No assigned users array found for todo:", req.params.todoId);
+      return res.json([]);
+    }
+
+    const assignedUsers = todo.assignedUsers.map((user) => {
+      console.log("Processing user:", user);
+      return {
+        id: user._id.toString(),
+        name: user.name,
+        avatar: user.picture || null,
+      };
+    });
+
+    console.log("Returning assigned users:", assignedUsers);
+    res.json(assignedUsers);
+  } catch (err) {
+    console.error("Error in /api/todos/:todoId/assigned:", {
+      error: err.message,
+      stack: err.stack,
+      todoId: req.params.todoId,
+    });
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Assign a user to a todo
+app.post("/api/todos/:todoId/assign/:userId", auth, async (req, res) => {
+  try {
+    const todo = await Todo.findById(req.params.todoId);
+    if (!todo) {
+      return res.status(404).json({ error: "Todo not found" });
+    }
+
+    // Check if user exists
+    const user = await mongoose.model("User").findById(req.params.userId);
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    // Add user to assignedUsers if not already assigned
+    if (!todo.assignedUsers.includes(req.params.userId)) {
+      todo.assignedUsers.push(req.params.userId);
+      await todo.save();
+    }
+
+    const updatedTodo = await Todo.findById(todo._id)
+      .populate("assignedUsers", "name picture")
+      .lean();
+
+    const assignedUsers = updatedTodo.assignedUsers.map((user) => ({
+      id: user._id.toString(),
+      name: user.name,
+      avatar: user.picture,
+    }));
+
+    res.json(assignedUsers);
+  } catch (err) {
+    console.error("Error in POST /api/todos/:todoId/assign/:userId:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Remove assignment from a todo
+app.delete("/api/todos/:todoId/assign/:userId", auth, async (req, res) => {
+  try {
+    const todo = await Todo.findById(req.params.todoId);
+    if (!todo) {
+      return res.status(404).json({ error: "Todo not found" });
+    }
+
+    todo.assignedUsers = todo.assignedUsers.filter(
+      (userId) => userId.toString() !== req.params.userId
+    );
+    await todo.save();
+
+    const updatedTodo = await Todo.findById(todo._id)
+      .populate("assignedUsers", "name picture")
+      .lean();
+
+    const assignedUsers = updatedTodo.assignedUsers.map((user) => ({
+      id: user._id.toString(),
+      name: user.name,
+      avatar: user.picture,
+    }));
+
+    res.json(assignedUsers);
+  } catch (err) {
+    console.error("Error in DELETE /api/todos/:todoId/assign/:userId:", err);
+    res.status(500).json({ error: err.message });
   }
 });
 
