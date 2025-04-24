@@ -10,41 +10,53 @@ const { router: userRoutes, auth } = require("./user/userRoutes");
 const Comment = require("./models/Comment");
 
 // Configure CORS with specific options
+const allowedOrigins = [
+  "https://todo-frontend-v1-git-vercel-neverefts-projects.vercel.app",
+  "https://todo-frontend-v1.vercel.app",
+  "https://todo-frontend-v1-git-main-neverefts-projects.vercel.app",
+  process.env.FRONTEND_URL,
+];
+
 const corsOptions = {
-  origin: [
-    "https://todo-frontend-v1-git-vercel-neverefts-projects.vercel.app",
-    "https://todo-frontend-v1.vercel.app",
-    // Add any other frontend URLs you need
-    process.env.FRONTEND_URL, // In case you have it in env variables
-  ].filter(Boolean), // Remove any undefined/null values
-  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization"],
+  origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps or curl requests)
+    if (!origin) return callback(null, true);
+
+    if (
+      allowedOrigins.indexOf(origin) !== -1 ||
+      process.env.NODE_ENV !== "production"
+    ) {
+      callback(null, true);
+    } else {
+      callback(new Error("Not allowed by CORS"));
+    }
+  },
+  methods: "GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS",
+  allowedHeaders: [
+    "Content-Type",
+    "Authorization",
+    "X-Requested-With",
+    "Accept",
+    "Origin",
+  ],
   credentials: true,
-  optionsSuccessStatus: 200,
+  preflightContinue: false,
+  optionsSuccessStatus: 204,
 };
 
-// Apply CORS configuration
-app.use(cors(corsOptions));
-
-// Additional headers middleware
-app.use((req, res, next) => {
-  res.header("Access-Control-Allow-Origin", req.headers.origin);
-  res.header("Access-Control-Allow-Credentials", "true");
-  res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
-  res.header(
-    "Access-Control-Allow-Headers",
-    "Origin, X-Requested-With, Content-Type, Accept, Authorization"
-  );
-
-  // Handle preflight requests
-  if (req.method === "OPTIONS") {
-    return res.status(200).json({
-      body: "OK",
-    });
-  }
-
-  next();
-});
+// Apply CORS configuration before any other middleware
+app.use(
+  cors({
+    origin: [
+      "https://todo-frontend-v1-git-vercel-neverefts-projects.vercel.app",
+      "https://todo-frontend-h0g4ec09z-neverefts-projects.vercel.app",
+    ],
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  })
+);
+// Handle OPTIONS preflight requests
+app.options("*", cors(corsOptions));
 
 // Connect to MongoDB
 mongoose.connect(process.env.MONGODB_URI);
