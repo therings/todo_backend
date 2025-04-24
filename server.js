@@ -9,6 +9,43 @@ const PORT = process.env.PORT || 3000; // Vercel will override this automaticall
 const { router: userRoutes, auth } = require("./user/userRoutes");
 const Comment = require("./models/Comment");
 
+// Configure CORS with specific options
+const corsOptions = {
+  origin: [
+    "https://todo-frontend-v1-git-vercel-neverefts-projects.vercel.app",
+    "https://todo-frontend-v1.vercel.app",
+    // Add any other frontend URLs you need
+    process.env.FRONTEND_URL, // In case you have it in env variables
+  ].filter(Boolean), // Remove any undefined/null values
+  methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+  credentials: true,
+  optionsSuccessStatus: 200,
+};
+
+// Apply CORS configuration
+app.use(cors(corsOptions));
+
+// Additional headers middleware
+app.use((req, res, next) => {
+  res.header("Access-Control-Allow-Origin", req.headers.origin);
+  res.header("Access-Control-Allow-Credentials", "true");
+  res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
+  res.header(
+    "Access-Control-Allow-Headers",
+    "Origin, X-Requested-With, Content-Type, Accept, Authorization"
+  );
+
+  // Handle preflight requests
+  if (req.method === "OPTIONS") {
+    return res.status(200).json({
+      body: "OK",
+    });
+  }
+
+  next();
+});
+
 // Connect to MongoDB
 mongoose.connect(process.env.MONGODB_URI);
 
@@ -47,7 +84,6 @@ const DeletedTodo = mongoose.model("DeletedTodo", DeletedTodoSchema);
 
 // Add JSON middleware to parse request body with increased limit
 app.use(express.json({ limit: "10mb" }));
-app.use(cors());
 
 // Add user routes
 app.use("/api/users", userRoutes);
@@ -553,3 +589,7 @@ app.delete("/api/todos/:todoId/assign/:userId", auth, async (req, res) => {
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
+if (!process.env.JWT_SECRET) {
+  throw new Error("JWT_SECRET environment variable is required");
+}
