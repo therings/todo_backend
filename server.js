@@ -9,6 +9,52 @@ const PORT = process.env.PORT || 3000; // Vercel will override this automaticall
 const { router: userRoutes, auth } = require("./user/userRoutes");
 const Comment = require("./models/Comment");
 
+// Configure CORS with specific options
+const allowedOrigins = [
+  "https://todo-frontend-v1-git-vercel-neverefts-projects.vercel.app",
+  "https://todo-frontend-v1.vercel.app",
+  "https://todo-frontend-v1-git-main-neverefts-projects.vercel.app",
+  "https://todo-frontend-h0g4ec09z-neverefts-projects.vercel.app",
+  "https://todo-frontend-ashy.vercel.app", // Add your new frontend URL here
+  process.env.FRONTEND_URL,
+  // Add any other domains you might deploy to
+];
+
+const corsOptions = {
+  origin: function (origin, callback) {
+    // Allow requests with no origin (like mobile apps, curl requests, or same origin)
+    if (!origin) return callback(null, true);
+
+    if (
+      allowedOrigins.includes(origin) ||
+      process.env.NODE_ENV !== "production"
+    ) {
+      callback(null, true);
+    } else {
+      console.log("CORS blocked for origin:", origin);
+      callback(null, true); // Allow all origins for now (safer for debugging)
+      // In production, you might want to use: callback(new Error("Not allowed by CORS"))
+    }
+  },
+  methods: "GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS",
+  allowedHeaders: [
+    "Content-Type",
+    "Authorization",
+    "X-Requested-With",
+    "Accept",
+    "Origin",
+  ],
+  credentials: true,
+  preflightContinue: false,
+  optionsSuccessStatus: 204,
+};
+
+// Apply CORS configuration before any other middleware
+app.use(cors(corsOptions));
+
+// Handle OPTIONS preflight requests explicitly
+app.options("*", cors(corsOptions));
+
 // Connect to MongoDB
 mongoose.connect(process.env.MONGODB_URI);
 
@@ -47,7 +93,22 @@ const DeletedTodo = mongoose.model("DeletedTodo", DeletedTodoSchema);
 
 // Add JSON middleware to parse request body with increased limit
 app.use(express.json({ limit: "10mb" }));
-app.use(cors());
+
+// Add an explicit handler for OPTIONS requests to all routes
+app.options("*", (req, res) => {
+  console.log("Handling OPTIONS request");
+  // Set CORS headers
+  res.header("Access-Control-Allow-Origin", "*");
+  res.header(
+    "Access-Control-Allow-Methods",
+    "GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS"
+  );
+  res.header(
+    "Access-Control-Allow-Headers",
+    "Content-Type, Authorization, X-Requested-With, Accept, Origin"
+  );
+  res.status(204).send();
+});
 
 // Add user routes
 app.use("/api/users", userRoutes);
@@ -553,3 +614,7 @@ app.delete("/api/todos/:todoId/assign/:userId", auth, async (req, res) => {
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
+
+if (!process.env.JWT_SECRET) {
+  throw new Error("JWT_SECRET environment variable is required");
+}
